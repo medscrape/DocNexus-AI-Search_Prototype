@@ -94,13 +94,27 @@ def infer_viz_dimension(original_query: str, sql: str) -> ChartInfo:
     Infer visualization dimension and chart type based on query and SQL analysis.
     
     Returns:
-    - dimension 1 + "pie": For simple categorical breakdowns (best for 3-8 categories)
+    - dimension 1 + "pie": For simple categorical breakdowns or single values
     - dimension 2 + "bar": For categorical comparisons, rankings, top N lists
     - dimension 2 + "line": For time series data
     """
     
     query_lower = original_query.lower()
     sql_lower = sql.lower()
+    
+    # === SINGLE VALUE DETECTION (dimension 1) - Check this FIRST ===
+    
+    # Check if SQL has no GROUP BY - this means single aggregate result
+    has_group_by = "group by" in sql_lower
+    has_sql_agg = any(func in sql_lower for func in ["count(", "sum(", "avg(", "uniq(", "min(", "max("])
+    
+    # If aggregation without grouping = single value result
+    if has_sql_agg and not has_group_by:
+        return {
+            "dimension": 1,
+            "chart": "pie",  # Or could be "metric" for single number display
+            "rationale": "Single aggregate value - no grouping detected in SQL"
+        }
     
     # === TIME SERIES DETECTION (dimension 2, line chart) ===
     
@@ -148,6 +162,15 @@ def infer_viz_dimension(original_query: str, sql: str) -> ChartInfo:
         }
     
     # === BAR CHART DETECTION (dimension 2, bar chart) ===
+    # Only proceed if we have GROUP BY (multiple categories to compare)
+    
+    if not has_group_by:
+        # No grouping = not suitable for bar chart
+        return {
+            "dimension": 1,
+            "chart": "pie",
+            "rationale": "No grouping found - single value or simple result"
+        }
     
     # 1. Ranking/comparison keywords
     ranking_keywords = [
@@ -158,7 +181,7 @@ def infer_viz_dimension(original_query: str, sql: str) -> ChartInfo:
     ]
     has_ranking = any(keyword in query_lower for keyword in ranking_keywords)
     
-    # 2. Count/aggregate keywords
+    # 2. Count/aggregate keywords (only relevant if we have grouping)
     aggregate_keywords = [
         "count", "total", "sum", "volume", "number of",
         "how many", "quantity", "amount"
@@ -168,38 +191,31 @@ def infer_viz_dimension(original_query: str, sql: str) -> ChartInfo:
     # 3. "By" grouping keywords (e.g., "by state", "by provider", "by drug")
     by_grouping = re.search(r"\bby\s+\w+", query_lower) is not None
     
-    # 4. SQL has GROUP BY (non-time)
-    has_group_by = "group by" in sql_lower
-    
-    # 5. SQL has aggregation functions
-    agg_functions = ["count(", "sum(", "avg(", "uniq(", "min(", "max("]
-    has_sql_agg = any(func in sql_lower for func in agg_functions)
-    
-    # 6. LIMIT clause suggests top-N query
+    # 4. LIMIT clause suggests top-N query
     has_limit = "limit" in sql_lower
     
-    # 7. ORDER BY suggests ranking
+    # 5. ORDER BY suggests ranking
     has_order_by = "order by" in sql_lower
     
-    # Bar chart scoring
+    # Bar chart scoring (only if we have GROUP BY)
     bar_score = 0
     reasons = []
     
     if has_ranking:
         bar_score += 3
         reasons.append("ranking keywords")
-    if has_aggregate:
+    if has_aggregate and has_group_by:  # Only count if grouped
         bar_score += 2
-        reasons.append("aggregation keywords")
+        reasons.append("aggregation with grouping")
     if by_grouping:
         bar_score += 2
         reasons.append("'by' grouping pattern")
     if has_group_by:
         bar_score += 2
         reasons.append("SQL GROUP BY")
-    if has_sql_agg:
+    if has_sql_agg and has_group_by:  # Only count if grouped
         bar_score += 2
-        reasons.append("SQL aggregation")
+        reasons.append("SQL aggregation with grouping")
     if has_limit:
         bar_score += 1
         reasons.append("SQL LIMIT")
@@ -233,11 +249,11 @@ def infer_viz_dimension(original_query: str, sql: str) -> ChartInfo:
     is_simple_grouping = len(group_by_columns) == 1
     
     # Pie chart conditions
-    if has_pie_keywords and (has_sql_agg or has_group_by):
+    if has_pie_keywords and has_group_by:
         return {
             "dimension": 1,
             "chart": "pie",
-            "rationale": "Distribution/breakdown keywords with aggregation"
+            "rationale": "Distribution/breakdown keywords with grouping"
         }
     
     if is_simple_grouping and has_sql_agg and not (has_ranking or has_limit or has_order_by):
@@ -249,28 +265,27 @@ def infer_viz_dimension(original_query: str, sql: str) -> ChartInfo:
     
     # === DEFAULT LOGIC ===
     
-    # If we have any aggregation or grouping but no strong time signals,
-    # default to bar chart (better for comparisons than pie)
-    if (has_group_by or has_sql_agg) and bar_score >= 1:
-        return {
-            "dimension": 2,
-            "chart": "bar",
-            "rationale": f"Aggregation detected, defaulting to bar chart (score: {bar_score})"
-        }
-    
-    # If it's just a single count/total with no grouping
-    if has_sql_agg and not has_group_by:
+    # If we have grouping but low bar score, could still be pie-worthy
+    if has_group_by and bar_score < 4:
         return {
             "dimension": 1,
             "chart": "pie",
-            "rationale": "Single aggregate value, suitable for simple display"
+            "rationale": "Categorical grouping, not strong enough for bar chart"
         }
     
-    # Final fallback - prefer bar over pie for most cases
+    # If we have aggregation + grouping but no strong signals
+    if has_group_by and has_sql_agg:
+        return {
+            "dimension": 2,
+            "chart": "bar",
+            "rationale": "Grouped aggregation - defaulting to bar chart"
+        }
+    
+    # Final fallback
     return {
-        "dimension": 2,
-        "chart": "bar",
-        "rationale": "Default to bar chart for better data comparison"
+        "dimension": 1,
+        "chart": "pie",
+        "rationale": "No strong signals - defaulting to simple display"
     }
 
 class NLPToClickHouseAgent:
