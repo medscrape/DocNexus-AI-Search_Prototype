@@ -264,6 +264,11 @@ def get_and_execute_query():
         "columns": [...],
         "medical_codes": {...},
         "required_tables": [...],
+        "viz": {
+            "dimension": 1,
+            "chart": "pie",
+            "rationale": "Single categorical GROUP BY with aggregates"
+        },
         "metadata": {...}
     }
     """
@@ -330,6 +335,7 @@ def get_and_execute_query():
                     'columns': columns,
                     'medical_codes': result['medical_codes'],
                     'required_tables': result['required_tables'],
+                    'viz': result.get('viz', {}),
                     'metadata': {
                         'tables_used': result['metadata']['tables_used'],
                         'codes_extracted': result['metadata']['codes_extracted'],
@@ -349,7 +355,8 @@ def get_and_execute_query():
                     'execution_time_ms': result['timing']['stages'].get('query_execution', 0),
                     'total_time_ms': result['timing']['total_time_ms'],
                     'medical_codes': result['medical_codes'],
-                    'required_tables': result['required_tables']
+                    'required_tables': result['required_tables'],
+                    'viz': result.get('viz', {})
                 }
                 return jsonify(response), 400
             
