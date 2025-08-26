@@ -25,6 +25,7 @@ load_dotenv(override=True)
 from v1_agent import NLPToClickHouseAgent
 from clickhouse_agent import ClickHouseAgent
 from clarifying_agent import QueryClarifyingAgent
+from column_simple import get_medical_codes
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -138,7 +139,16 @@ def process_clarification():
         "success": true,
         "original_query": "Find top hospitals for diabetes patients",
         "clarification_provided": "I want rankings by patient volume for 2024 in California",
-        "refined_query": "Find top 10 hospitals in California by diabetes patient volume for 2024"
+        "refined_query": "Find top 10 hospitals in California by diabetes patient volume for 2024",
+        "medical_codes": {
+            "icd10": [{"code": "E11", "description": "Type 2 diabetes mellitus"}],
+            "icd9": [{"code": "25000", "description": "Diabetes mellitus without mention of complication"}],
+            "cpt": [],
+            "hcpcs": [],
+            "loinc": [],
+            "snomed": [],
+            "jcodes": []
+        }
     }
     """
     try:
@@ -201,11 +211,15 @@ Return refined query:"""
         # Apply expansion to the refined query
         final_query = clarifying_agent._expand_query(refined_query)
         
+        # Get medical codes for the refined query
+        medical_codes = get_medical_codes(final_query)
+        
         response = {
             'success': True,
             'original_query': original_query,
             'clarification_provided': clarification,
-            'refined_query': final_query
+            'refined_query': final_query,
+            'medical_codes': medical_codes
         }
         
         # Log the request
