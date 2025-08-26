@@ -12,6 +12,7 @@ Endpoints:
 import json
 import time
 import os
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from typing import Dict, Any
@@ -23,6 +24,7 @@ load_dotenv(override=True)
 # Import our existing agents
 from v1_agent import NLPToClickHouseAgent
 from clickhouse_agent import ClickHouseAgent
+from clarifying_agent import QueryClarifyingAgent
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -31,14 +33,17 @@ CORS(app)  # Enable CORS for all routes
 # Initialize agents globally
 nlp_agent = None
 clickhouse_agent = None
+clarifying_agent = None
 
 def initialize_agents():
     """Initialize agents on first request"""
-    global nlp_agent, clickhouse_agent
+    global nlp_agent, clickhouse_agent, clarifying_agent
     if nlp_agent is None:
         nlp_agent = NLPToClickHouseAgent()
     if clickhouse_agent is None:
         clickhouse_agent = ClickHouseAgent()
+    if clarifying_agent is None:
+        clarifying_agent = QueryClarifyingAgent()
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -48,6 +53,172 @@ def health_check():
         'service': 'NLP to ClickHouse API',
         'timestamp': time.time()
     })
+
+@app.route('/get-clarifying-questions', methods=['POST'])
+def get_clarifying_questions():
+    """
+    Stage 1A: Get clarifying questions for a natural language query
+    
+    Request Body:
+    {
+        "query": "Find top hospitals for diabetes patients"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "original_query": "Find top hospitals for diabetes patients",
+        "questions": "To better understand your request: 1. Do you want rankings by patient volume...?",
+        "needs_clarification": true
+    }
+    """
+    try:
+        # Initialize agents
+        initialize_agents()
+        
+        # Validate request
+        if not request.is_json:
+            return jsonify({
+                'success': False,
+                'error': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required field: query'
+            }), 400
+        
+        user_query = data['query'].strip()
+        if not user_query:
+            return jsonify({
+                'success': False,
+                'error': 'Query cannot be empty'
+            }), 400
+        
+        # Get clarifying questions from the agent
+        questions = clarifying_agent._get_questions(user_query)
+        
+        # Check if clarification is needed
+        needs_clarification = "QUERY_CLEAR" not in questions
+        
+        response = {
+            'success': True,
+            'original_query': user_query,
+            'questions': questions if needs_clarification else "Query is clear and ready for processing.",
+            'needs_clarification': needs_clarification
+        }
+        
+        # Log the request
+        app.logger.info(f"Clarifying Questions Generated - Query: {user_query[:100]}... - Needs Clarification: {needs_clarification}")
+        
+        return jsonify(response), 200
+    
+    except Exception as e:
+        app.logger.error(f"Error in get_clarifying_questions: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Internal server error: {str(e)}'
+        }), 500
+
+@app.route('/process-clarification', methods=['POST'])
+def process_clarification():
+    """
+    Stage 1B: Process user's clarification responses and create refined query
+    
+    Request Body:
+    {
+        "original_query": "Find top hospitals for diabetes patients",
+        "clarification": "I want rankings by patient volume for 2024 in California"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "original_query": "Find top hospitals for diabetes patients",
+        "clarification_provided": "I want rankings by patient volume for 2024 in California",
+        "refined_query": "Find top 10 hospitals in California by diabetes patient volume for 2024"
+    }
+    """
+    try:
+        # Initialize agents
+        initialize_agents()
+        
+        # Validate request
+        if not request.is_json:
+            return jsonify({
+                'success': False,
+                'error': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.get_json()
+        if not data or 'original_query' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required field: original_query'
+            }), 400
+        
+        original_query = data['original_query'].strip()
+        clarification = data.get('clarification', '').strip()
+        
+        if not original_query:
+            return jsonify({
+                'success': False,
+                'error': 'Original query cannot be empty'
+            }), 400
+        
+        # Process the clarification
+        if clarification and clarification.lower() != 'proceed':
+            # Combine original query with clarification
+            combined_prompt = f"""Combine these into one clear query:
+Original: "{original_query}"
+Clarification: "{clarification}"
+
+Return refined query:"""
+
+            try:
+                response = requests.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    headers={'Authorization': f'Bearer {clarifying_agent.api_key}', 'Content-Type': 'application/json'},
+                    json={
+                        'model': 'gpt-4o-mini',
+                        'messages': [{'role': 'user', 'content': combined_prompt}],
+                        'temperature': 0.1,
+                        'max_tokens': 100
+                    }
+                )
+                if response.status_code == 200:
+                    refined = response.json()['choices'][0]['message']['content'].strip()
+                    refined_query = refined.strip('"').strip("'")
+                else:
+                    refined_query = f"{original_query}. {clarification}"
+            except:
+                refined_query = f"{original_query}. {clarification}"
+        else:
+            refined_query = original_query
+        
+        # Apply expansion to the refined query
+        final_query = clarifying_agent._expand_query(refined_query)
+        
+        response = {
+            'success': True,
+            'original_query': original_query,
+            'clarification_provided': clarification,
+            'refined_query': final_query
+        }
+        
+        # Log the request
+        app.logger.info(f"Clarification Processed - Original: {original_query[:50]}... - Final: {final_query[:50]}...")
+        
+        return jsonify(response), 200
+    
+    except Exception as e:
+        app.logger.error(f"Error in process_clarification: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Internal server error: {str(e)}'
+        }), 500
 
 @app.route('/GetSQLQuery', methods=['POST'])
 def get_sql_query():
@@ -432,6 +603,8 @@ def not_found(error):
         'error': 'Endpoint not found',
         'available_endpoints': [
             'GET /health',
+            'POST /get-clarifying-questions',
+            'POST /process-clarification',
             'POST /GetSQLQuery',
             'POST /ExecuteQuery', 
             'POST /GetAndExecuteQuery',
@@ -457,11 +630,13 @@ if __name__ == '__main__':
     
     print("🚀 Starting Flask API Server...")
     print("📊 Available endpoints:")
-    print("   GET  /health              - Health check")
-    print("   POST /GetSQLQuery         - Generate SQL from natural language")
-    print("   POST /ExecuteQuery        - Execute SQL query on ClickHouse")
-    print("   POST /GetAndExecuteQuery  - Combined: Generate + Execute")
-    print("   GET  /tables              - List available tables")
+    print("   GET  /health                      - Health check")
+    print("   POST /get-clarifying-questions    - Get clarifying questions for NLP query")
+    print("   POST /process-clarification       - Process clarification and refine query")
+    print("   POST /GetSQLQuery                 - Generate SQL from natural language")
+    print("   POST /ExecuteQuery                - Execute SQL query on ClickHouse")
+    print("   POST /GetAndExecuteQuery          - Combined: Generate + Execute")
+    print("   GET  /tables                      - List available tables")
     print()
     print("🔗 Server will be available at: http://localhost:5001")
     print("📖 Use Content-Type: application/json for POST requests")
