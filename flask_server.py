@@ -567,6 +567,162 @@ def get_and_execute_query():
             'error': f'Internal server error: {str(e)}'
         }), 500
 
+@app.route('/ExecuteWithCodes', methods=['POST'])
+def execute_with_codes():
+    """
+    Execute query using refined query and medical codes from process-clarification
+    
+    Request Body:
+    {
+        "original_query": "Find top hospitals for diabetes patients",
+        "clarification_provided": "I want rankings by patient volume for 2024 in California",
+        "refined_query": "Find top 10 hospitals in California by diabetes patient volume for 2024",
+        "medical_codes": {
+            "icd10": [{"code": "E11", "description": "Type 2 diabetes mellitus"}],
+            "icd9": [{"code": "25000", "description": "Diabetes mellitus without mention of complication"}],
+            "cpt": [],
+            "hcpcs": [],
+            "loinc": [],
+            "snomed": [],
+            "jcodes": []
+        },
+        "format": "json"  // optional
+    }
+    
+    Response:
+    {
+        "success": true,
+        "original_query": "Find top hospitals for diabetes patients",
+        "refined_query": "Find top 10 hospitals in California by diabetes patient volume for 2024",
+        "sql_query": "SELECT...",
+        "results": [...],
+        "generation_time_ms": 5000,
+        "execution_time_ms": 150,
+        "total_time_ms": 5150,
+        "row_count": 1,
+        "columns": [...],
+        "medical_codes": {...},
+        "required_tables": [...],
+        "viz": {
+            "dimension": 1,
+            "chart": "pie",
+            "rationale": "Single categorical GROUP BY with aggregates"
+        },
+        "metadata": {...}
+    }
+    """
+    try:
+        # Initialize agents
+        initialize_agents()
+        
+        # Validate request
+        if not request.is_json:
+            return jsonify({
+                'success': False,
+                'error': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.get_json()
+        if not data or 'refined_query' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required field: refined_query'
+            }), 400
+        
+        refined_query = data['refined_query'].strip()
+        if not refined_query:
+            return jsonify({
+                'success': False,
+                'error': 'Refined query cannot be empty'
+            }), 400
+        
+        # Extract fields from payload
+        original_query = data.get('original_query', '')
+        clarification_provided = data.get('clarification_provided', '')
+        medical_codes = data.get('medical_codes', {})
+        output_format = data.get('format', 'raw')
+        
+        # Use v1_agent with the provided medical codes (skip column_simple.py)
+        # Temporarily store the provided codes in the agent to avoid re-calling column_simple.py
+        nlp_agent._provided_medical_codes = medical_codes
+        result = nlp_agent.generate_and_execute_query(refined_query, execute=True)
+        
+        if result['success']:
+            # Extract execution results
+            execution_result = result.get('execution_result')
+            
+            if execution_result is not None:
+                # Format execution results
+                rows = execution_result.result_rows
+                columns = execution_result.column_names
+                
+                if output_format.lower() == 'json':
+                    # Convert to list of dictionaries
+                    formatted_results = []
+                    for row in rows:
+                        row_dict = {}
+                        for i, col in enumerate(columns):
+                            row_dict[col] = row[i] if i < len(row) else None
+                        formatted_results.append(row_dict)
+                else:
+                    # Raw format - list of lists
+                    formatted_results = [list(row) for row in rows]
+                
+                response = {
+                    'success': True,
+                    'original_query': original_query,
+                    'refined_query': refined_query,
+                    'sql_query': result['query'],
+                    'results': formatted_results,
+                    'generation_time_ms': result['timing']['stages'].get('parallel_analysis', 0) + result['timing']['stages'].get('gpt_generation', 0),
+                    'execution_time_ms': result['timing']['stages'].get('query_execution', 0),
+                    'total_time_ms': result['timing']['total_time_ms'],
+                    'row_count': len(rows),
+                    'columns': columns,
+                    'medical_codes': medical_codes,  # Use the provided codes
+                    'required_tables': result['required_tables'],
+                    'viz': result.get('viz', {}),
+                    'metadata': {
+                        'tables_used': result['metadata']['tables_used'],
+                        'codes_provided': medical_codes,
+                        'executed_at': time.time(),
+                        'format': output_format
+                    }
+                }
+            else:
+                # Query generated but execution failed
+                response = {
+                    'success': False,
+                    'error': 'SQL query generated successfully but execution failed',
+                    'original_query': original_query,
+                    'refined_query': refined_query,
+                    'sql_query': result['query'],
+                    'medical_codes': medical_codes,
+                    'generation_time_ms': result['timing']['stages'].get('parallel_analysis', 0) + result['timing']['stages'].get('gpt_generation', 0),
+                    'total_time_ms': result['timing']['total_time_ms']
+                }
+        else:
+            # Query generation failed
+            response = {
+                'success': False,
+                'error': result['error'],
+                'original_query': original_query,
+                'refined_query': refined_query,
+                'medical_codes': medical_codes
+            }
+        
+        # Log the request
+        app.logger.info(f"ExecuteWithCodes - Refined Query: {refined_query[:50]}... - Success: {response['success']}")
+        
+        return jsonify(response), 200 if response['success'] else 500
+    
+    except Exception as e:
+        app.logger.error(f"Error in execute_with_codes: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Internal server error: {str(e)}'
+        }), 500
+
 @app.route('/tables', methods=['GET'])
 def list_tables():
     """
@@ -622,6 +778,7 @@ def not_found(error):
             'POST /GetSQLQuery',
             'POST /ExecuteQuery', 
             'POST /GetAndExecuteQuery',
+            'POST /ExecuteWithCodes',
             'GET /tables'
         ]
     }), 404
@@ -650,6 +807,7 @@ if __name__ == '__main__':
     print("   POST /GetSQLQuery                 - Generate SQL from natural language")
     print("   POST /ExecuteQuery                - Execute SQL query on ClickHouse")
     print("   POST /GetAndExecuteQuery          - Combined: Generate + Execute")
+    print("   POST /ExecuteWithCodes            - Execute using refined query + medical codes")
     print("   GET  /tables                      - List available tables")
     print()
     print("🔗 Server will be available at: http://localhost:5001")

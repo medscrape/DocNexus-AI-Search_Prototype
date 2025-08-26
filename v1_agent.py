@@ -614,13 +614,21 @@ Return ONLY the ClickHouse SQL query, nothing else.
     def _run_parallel_analysis(self, query: str) -> tuple:
         """Run medical code extraction and table identification in parallel"""
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            # Submit both tasks simultaneously
-            codes_future = executor.submit(get_medical_codes, query)
-            tables_future = executor.submit(self.table_agent.identify_tables, query)
+            # Check if medical codes are already provided (from ExecuteWithCodes endpoint)
+            if hasattr(self, '_provided_medical_codes') and self._provided_medical_codes:
+                # Use provided codes, only run table identification
+                medical_codes = self._provided_medical_codes
+                required_tables = self.table_agent.identify_tables(query)
+                # Clean up the temporary attribute
+                delattr(self, '_provided_medical_codes')
+            else:
+                # Submit both tasks simultaneously (original behavior)
+                codes_future = executor.submit(get_medical_codes, query)
+                tables_future = executor.submit(self.table_agent.identify_tables, query)
 
-            # Wait for both to complete
-            medical_codes = codes_future.result()
-            required_tables = tables_future.result()
+                # Wait for both to complete
+                medical_codes = codes_future.result()
+                required_tables = tables_future.result()
 
             return medical_codes, required_tables
 

@@ -141,9 +141,8 @@ Return refined query:"""
 
     def _expand_query(self, query):
         prompt = f"""Expand this healthcare query by:
-1. Expanding abbreviations if needed.(DM → diabetes mellitus, HTN → hypertension)
-2. Clarifying vague terms ("top" → "highest prescription volume", "recent" → "last 12 months")
-3. Standardizing medical terminology
+1. Clarifying vague terms ("top" → "highest prescription volume")
+2. Standardizing medical terminology.
 
 Query: "{query}"
 
