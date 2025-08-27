@@ -16,7 +16,7 @@ load_dotenv(override=True)
 
 # Configuration from environment variables
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 def get_medical_codes(query: str) -> Dict[str, List[Dict[str, str]]]:
     try:
@@ -48,8 +48,8 @@ Rules:
 - Be specific and accurate with both codes AND descriptions
 - Include primary and common secondary codes
 - Do NOT include NDC or RxNorm codes
-- For procedure queries, focus heavily on CPT codes
-- Include ALL relevant CPT codes for each procedure mentioned
+- For procedure queries, include **CPT and HCPCS Level II codes**
+- Include **all relevant HCPCS Level II codes**, such as **S-codes**, **J-codes**, **Q-codes**, and others, especially when CPT codes do not fully represent the procedure or billing detail
 - Always include BOTH the code and its full official description
 - Keep descriptions concise but medically accurate
 """
