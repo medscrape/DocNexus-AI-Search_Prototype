@@ -112,7 +112,7 @@ class MedicalTableIdentificationAgent:
         # Updated semantic patterns including referral-specific terms
         self.semantic_patterns = {
             'needs_diagnosis': ['diagnosis', 'condition', 'disease', 'icd', 'patients with'],
-            'needs_procedure': ['procedure', 'surgery', 'cpt', 'hcpcs', 'performed'],
+            'needs_procedure': ['procedure', 'surgery', 'surgical', 'surgeon','cpt', 'hcpcs', 'performed', 'operation', 'bariatric'],
             'needs_drug': ['drug', 'medication', 'prescription', 'prescribed', 'pharmacy'],
             'needs_provider': ['provider', 'doctor', 'physician', 'npi', 'organization', 'hospital'],
             'needs_referral': ['referral', 'referred', 'referring', 'sent', 'referral pattern', 'care coordination'],

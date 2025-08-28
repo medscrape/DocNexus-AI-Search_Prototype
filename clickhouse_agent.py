@@ -90,8 +90,7 @@ if __name__ == "__main__":
 
     agent = ClickHouseAgent()
     test_queries = [
-        "DESCRIBE TABLE medical_blue",
-        "SELECT COUNT(*) FROM medical_blue LIMIT 5",
+        "SELECT * FROM pharmacy_blue LIMIT 3;",
     ]
     
     for query in test_queries:

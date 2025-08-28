@@ -473,6 +473,10 @@ medical_blue table:
 - procedure_code: for CPT/HCPCS codes
 - provider_npi: for provider identification
 - year, month: for temporal filtering
+- Use claim_line_charge_amt for the financial value (billed amount) associated with each procedure line item.
+- use rendering_provider_state for filtering US state (postal code e.g. 'CA'. 'TX')
+- Use patient_gender to filter or analyze patient populations by gender - Enum8 codes are: M=1, F=2, O=3, U=4, blank=5 (treat 1 as Male, 2 as Female).
+
 
 pharmacy_blue table:
 - patient_id: for patient identification (UUID)
