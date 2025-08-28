@@ -36,257 +36,128 @@ load_dotenv(override=True)
 from column_simple import get_medical_codes
 from table_agent import MedicalTableIdentificationAgent
 from clickhouse_agent import ClickHouseAgent
+from chart_agent import ChartClassificationCLI
 
 ChartInfo = Dict[str, Any]
 
 
-def _contains_time_words(text: str) -> bool:
-    text = text.lower()
-    time_words = [
-        "trend", "over time", "per month", "by month", "monthly",
-        "per year", "by year", "yearly", "timeline", "time series",
-        "moM", "YoY".lower()
-    ]
-    return any(w in text for w in time_words)
-
-
-def _looks_time_grouped(sql: str) -> bool:
-    s = sql.lower()
-    # Obvious time cols / functions
-    time_cols = [
-        r"\byear\b", r"\bmonth\b", r"\bdate\b", r"\bservice_date_dd\b",
-        r"\btransaction_dt\b", r"\bstatement_from_dd\b", r"\bstatement_to_dd\b",
-        r"\bservice_from_dd\b", r"\bservice_to_dd\b",
-        r"toyear\(", r"tomonth\(", r"toYYYYMM".lower(), r"toStartOfMonth".lower(), r"toDate".lower()
-    ]
-    if any(re.search(pat, s) for pat in time_cols):
-        # If we also see grouping/order by over time → definitely time series
-        if ("group by" in s and ("year" in s or "month" in s or "date" in s)) or \
-           ("order by" in s and ("year" in s or "month" in s or "date" in s)):
-            return True
-    # Look for classic pattern "group by year, month" or similar
-    if re.search(r"group\s+by\s+.*\byear\b.*\bmonth\b", s):
-        return True
-    return False
-
-
-def _extract_group_by_columns(sql: str) -> List[str]:
-    """Extract GROUP BY columns from SQL query."""
-    s = re.sub(r"\s+", " ", sql, flags=re.MULTILINE)
-    m = re.search(r"group\s+by\s+(.+?)(?:\s+order\s+by|\s+limit|\s+format|$)", s, flags=re.IGNORECASE)
-    if not m:
-        return []
-    
-    cols = m.group(1)
-    # Simple split by comma (ignoring nested functions for now)
-    return [c.strip() for c in cols.split(",") if c.strip()]
-
-
-def _has_clear_aggregate(sql: str) -> bool:
-    """Check if SQL has aggregation functions."""
-    s = sql.lower()
-    return any(fn in s for fn in ["count(", "sum(", "avg(", "uniq(", "min(", "max("])
 
 
 
-def infer_viz_dimension(original_query: str, sql: str) -> ChartInfo:
+def infer_viz_dimension(original_query: str, sql: str, chart_classifier=None) -> ChartInfo:
     """
-    Infer visualization dimension and chart type based on query and SQL analysis.
+    Infer visualization dimension and chart type using AI-powered chart classification.
     
-    Returns:
-    - dimension 1 + "pie": For simple categorical breakdowns or single values
-    - dimension 2 + "bar": For categorical comparisons, rankings, top N lists
-    - dimension 2 + "line": For time series data
+    Uses ChartClassificationCLI to determine appropriate chart types and dimensions.
     """
-    
-    query_lower = original_query.lower()
-    sql_lower = sql.lower()
-    
-    # === SINGLE VALUE DETECTION (dimension 1) - Check this FIRST ===
-    
-    # Check if SQL has no GROUP BY - this means single aggregate result
-    has_group_by = "group by" in sql_lower
-    has_sql_agg = any(func in sql_lower for func in ["count(", "sum(", "avg(", "uniq(", "min(", "max("])
-    
-    # If aggregation without grouping = single value result
-    if has_sql_agg and not has_group_by:
-        return {
-            "dimension": 1,
-            "chart": "pie",  # Or could be "metric" for single number display
-            "rationale": "Single aggregate value - no grouping detected in SQL"
+    try:
+        # Use provided chart classifier or create a new one
+        if chart_classifier is None:
+            chart_classifier = ChartClassificationCLI()
+        
+        # Get chart classification from AI
+        chart_result = chart_classifier.classify_query(original_query)
+        
+        # Handle errors from chart classification
+        if "error" in chart_result:
+            return {
+                "dimension": 1,
+                "chart": "pie",
+                "rationale": f"Chart classification error: {chart_result['error']} - using fallback"
+            }
+        
+        # Extract recommended charts and category
+        recommended_charts = chart_result.get("recommended_charts", ["pie-chart"])
+        primary_category = chart_result.get("primary_category", "ONE_DIMENSIONAL_CHARTS")
+        reasoning = chart_result.get("reasoning", "AI-based classification")
+        
+        # Map chart categories to dimensions
+        dimension_map = {
+            "ONE_DIMENSIONAL_CHARTS": 1,
+            "TWO_DIMENSIONAL_TIME_SERIES_CHARTS": 2,
+            "TWO_DIMENSIONAL_NON_TIME_SERIES_CHARTS": 2,
+            "THREE_DIMENSIONAL_TIME_SERIES_CHARTS": 3,
+            "THREE_DIMENSIONAL_NON_TIME_SERIES_CHARTS": 3,
+            "FOUR_DIMENSIONAL_TIME_SERIES_CHARTS": 4,
+            "MULTI_DIMENSIONAL_CHARTS": 5
         }
-    
-    # === TIME SERIES DETECTION (dimension 2, line chart) ===
-    
-    # 1. Explicit time-series keywords
-    time_keywords = [
-        "trend", "over time", "per month", "by month", "monthly",
-        "per year", "by year", "yearly", "annually", "timeline", 
-        "time series", "mom", "yoy", "quarter", "weekly", "daily"
-    ]
-    if any(keyword in query_lower for keyword in time_keywords):
-        return {
-            "dimension": 2,
-            "chart": "line",
-            "rationale": f"Detected time-series keywords: {[k for k in time_keywords if k in query_lower]}"
+        
+        # Get dimension from category
+        dimension = dimension_map.get(primary_category, 1)
+        
+        # Map specific chart types to simplified chart names
+        chart_type_map = {
+            # 1D charts
+            "pie-chart": "pie",
+            "donut-chart": "pie", 
+            "funnel-chart": "funnel",
+            
+            # 2D time series
+            "line-chart": "line",
+            "area-chart": "area",
+            
+            # 2D non-time series
+            "vertical-bar-chart": "bar",
+            "horizontal-bar-chart": "bar",
+            "column-chart": "bar",
+            
+            # 3D+ charts
+            "multi-series-line-chart": "line",
+            "grouped-bar-chart": "bar",
+            "stacked-bar-chart": "bar",
+            "stacked-column-chart": "bar",
+            "bubble-chart": "bubble",
+            "heat-map-geospatial": "heatmap",
+            "bubble-map": "bubble",
+            "animated-scatter-plot": "scatter",
+            "sankey-diagram": "sankey",
+            "stacked-area-categories": "area"
         }
-    
-    # 2. Year range pattern (e.g., "2020 to 2024", "between 2019 and 2023")
-    year_range_patterns = [
-        r"\b(19|20)\d{2}\s*(to|through|-)\s*(19|20)\d{2}\b",
-        r"between\s+(19|20)\d{2}\s+and\s+(19|20)\d{2}\b",
-        r"from\s+(19|20)\d{2}\s+(to|through|until)\s+(19|20)\d{2}\b"
-    ]
-    for pattern in year_range_patterns:
-        if re.search(pattern, query_lower):
-            # If SQL also groups by time, definitely time series
-            if re.search(r"group\s+by\s+.*(year|month|date)", sql_lower):
-                return {
-                    "dimension": 2,
-                    "chart": "line",
-                    "rationale": "Year range detected with GROUP BY on time column"
-                }
-    
-    # 3. SQL has GROUP BY with time columns
-    time_sql_patterns = [
-        r"group\s+by\s+.*\b(year|month|date)\b",
-        r"group\s+by\s+.*to(year|month|date)\(",
-        r"group\s+by\s+.*toyyyy",
-        r"order\s+by\s+.*\b(year|month|date)\b"
-    ]
-    if any(re.search(pattern, sql_lower) for pattern in time_sql_patterns):
+        
+        # Get primary chart type
+        primary_chart = recommended_charts[0] if recommended_charts else "pie-chart"
+        chart_type = chart_type_map.get(primary_chart, "pie")
+        
         return {
-            "dimension": 2,
-            "chart": "line",
-            "rationale": "SQL groups/orders by time columns"
+            "dimension": dimension,
+            "chart": chart_type,
+            "rationale": f"AI classification: {reasoning}",
+            "ai_details": {
+                "recommended_charts": recommended_charts,
+                "primary_category": primary_category,
+                "suggested_columns": chart_result.get("suggested_columns", {})
+            }
         }
-    
-    # === BAR CHART DETECTION (dimension 2, bar chart) ===
-    # Only proceed if we have GROUP BY (multiple categories to compare)
-    
-    if not has_group_by:
-        # No grouping = not suitable for bar chart
-        return {
-            "dimension": 1,
-            "chart": "pie",
-            "rationale": "No grouping found - single value or simple result"
-        }
-    
-    # 1. Ranking/comparison keywords
-    ranking_keywords = [
-        "top", "bottom", "highest", "lowest", "most", "least",
-        "best", "worst", "rank", "compare", "comparison",
-        "leading", "popular", "common", "frequent", "volume",
-        "largest", "smallest", "maximum", "minimum"
-    ]
-    has_ranking = any(keyword in query_lower for keyword in ranking_keywords)
-    
-    # 2. Count/aggregate keywords (only relevant if we have grouping)
-    aggregate_keywords = [
-        "count", "total", "sum", "volume", "number of",
-        "how many", "quantity", "amount"
-    ]
-    has_aggregate = any(keyword in query_lower for keyword in aggregate_keywords)
-    
-    # 3. "By" grouping keywords (e.g., "by state", "by provider", "by drug")
-    by_grouping = re.search(r"\bby\s+\w+", query_lower) is not None
-    
-    # 4. LIMIT clause suggests top-N query
-    has_limit = "limit" in sql_lower
-    
-    # 5. ORDER BY suggests ranking
-    has_order_by = "order by" in sql_lower
-    
-    # Bar chart scoring (only if we have GROUP BY)
-    bar_score = 0
-    reasons = []
-    
-    if has_ranking:
-        bar_score += 3
-        reasons.append("ranking keywords")
-    if has_aggregate and has_group_by:  # Only count if grouped
-        bar_score += 2
-        reasons.append("aggregation with grouping")
-    if by_grouping:
-        bar_score += 2
-        reasons.append("'by' grouping pattern")
-    if has_group_by:
-        bar_score += 2
-        reasons.append("SQL GROUP BY")
-    if has_sql_agg and has_group_by:  # Only count if grouped
-        bar_score += 2
-        reasons.append("SQL aggregation with grouping")
-    if has_limit:
-        bar_score += 1
-        reasons.append("SQL LIMIT")
-    if has_order_by:
-        bar_score += 1
-        reasons.append("SQL ORDER BY")
-    
-    # If strong bar chart signals, return bar chart
-    if bar_score >= 4:
-        return {
-            "dimension": 2,
-            "chart": "bar",
-            "rationale": f"Bar chart indicators (score: {bar_score}): {', '.join(reasons)}"
-        }
-    
-    # === PIE CHART DETECTION (dimension 1, pie chart) ===
-    
-    # Pie charts work best for:
-    # - Simple categorical breakdowns
-    # - "Distribution of", "breakdown by", "split by"
-    # - Single GROUP BY with reasonable number of categories
-    
-    pie_keywords = [
-        "distribution", "breakdown", "split", "share", "percentage",
-        "proportion", "composition", "makeup"
-    ]
-    has_pie_keywords = any(keyword in query_lower for keyword in pie_keywords)
-    
-    # Check if it's a simple single-column GROUP BY (good for pie)
-    group_by_columns = _extract_group_by_columns(sql)
-    is_simple_grouping = len(group_by_columns) == 1
-    
-    # Pie chart conditions
-    if has_pie_keywords and has_group_by:
+        
+    except Exception as e:
+        # Fallback to simple rule-based logic if chart classifier fails
+        query_lower = original_query.lower()
+        sql_lower = sql.lower()
+        
+        # Simple time series detection
+        time_keywords = ["trend", "over time", "monthly", "yearly", "timeline"]
+        if any(keyword in query_lower for keyword in time_keywords):
+            return {
+                "dimension": 2,
+                "chart": "line",
+                "rationale": f"Fallback: Time series keywords detected (chart classifier error: {e})"
+            }
+        
+        # Simple grouping detection
+        has_group_by = "group by" in sql_lower
+        if has_group_by:
+            return {
+                "dimension": 2,
+                "chart": "bar", 
+                "rationale": f"Fallback: GROUP BY detected (chart classifier error: {e})"
+            }
+        
+        # Default fallback
         return {
             "dimension": 1,
             "chart": "pie",
-            "rationale": "Distribution/breakdown keywords with grouping"
+            "rationale": f"Fallback: Default pie chart (chart classifier error: {e})"
         }
-    
-    if is_simple_grouping and has_sql_agg and not (has_ranking or has_limit or has_order_by):
-        return {
-            "dimension": 1,
-            "chart": "pie",
-            "rationale": f"Simple categorical grouping: {group_by_columns[0]}"
-        }
-    
-    # === DEFAULT LOGIC ===
-    
-    # If we have grouping but low bar score, could still be pie-worthy
-    if has_group_by and bar_score < 4:
-        return {
-            "dimension": 1,
-            "chart": "pie",
-            "rationale": "Categorical grouping, not strong enough for bar chart"
-        }
-    
-    # If we have aggregation + grouping but no strong signals
-    if has_group_by and has_sql_agg:
-        return {
-            "dimension": 2,
-            "chart": "bar",
-            "rationale": "Grouped aggregation - defaulting to bar chart"
-        }
-    
-    # Final fallback
-    return {
-        "dimension": 1,
-        "chart": "pie",
-        "rationale": "No strong signals - defaulting to simple display"
-    }
 
 class NLPToClickHouseAgent:
     """Main coordinator agent that generates and executes ClickHouse queries from NLP"""
@@ -299,6 +170,13 @@ class NLPToClickHouseAgent:
 
         self.table_agent = MedicalTableIdentificationAgent(self.api_key)
         self.clickhouse_agent = ClickHouseAgent()  # Initialize ClickHouse agent
+        
+        # Initialize chart classification agent
+        try:
+            self.chart_classifier = ChartClassificationCLI()
+        except Exception as e:
+            print(f"⚠️ Warning: Could not initialize chart classifier: {e}")
+            self.chart_classifier = None
 
         # Time tracking
         self.timing_data = {}
@@ -402,7 +280,7 @@ class NLPToClickHouseAgent:
             }
         }
 
-    def _build_comprehensive_prompt(self, query: str, medical_codes: Dict, required_tables: List[str]) -> str:
+    def _build_comprehensive_prompt(self, query: str, medical_codes: Dict, required_tables: List[str], data_explanation: str = None) -> str:
         """Build comprehensive prompt for ClickHouse query generation"""
 
         prompt = f"""You are an expert ClickHouse SQL developer specializing in medical data analytics.
@@ -410,9 +288,10 @@ class NLPToClickHouseAgent:
 TASK: Convert the natural language query into a precise ClickHouse SQL query.
 
 USER QUERY: "{query}"
+{f'DATA EXPLANATION: {data_explanation}' if data_explanation else ''}
 
-EXTRACTED MEDICAL CODES:
-{json.dumps(medical_codes, indent=2)}
+{f'''EXTRACTED MEDICAL CODES:
+{json.dumps(medical_codes, indent=2)}''' if medical_codes else 'NOTE: No medical codes extracted - analyze query text directly for medical conditions and treatments.'}
 
 REQUIRED TABLES: {', '.join(required_tables)}
 
@@ -615,7 +494,7 @@ Return ONLY the ClickHouse SQL query, nothing else.
 
         return prompt
 
-    def _run_parallel_analysis(self, query: str) -> tuple:
+    def _run_parallel_analysis(self, query: str, skip_medical_codes: bool = False) -> tuple:
         """Run medical code extraction and table identification in parallel"""
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # Check if medical codes are already provided (from ExecuteWithCodes endpoint)
@@ -625,6 +504,10 @@ Return ONLY the ClickHouse SQL query, nothing else.
                 required_tables = self.table_agent.identify_tables(query)
                 # Clean up the temporary attribute
                 delattr(self, '_provided_medical_codes')
+            elif skip_medical_codes:
+                # Skip medical code extraction, only run table identification
+                medical_codes = {}
+                required_tables = self.table_agent.identify_tables(query)
             else:
                 # Submit both tasks simultaneously (original behavior)
                 codes_future = executor.submit(get_medical_codes, query)
@@ -636,7 +519,7 @@ Return ONLY the ClickHouse SQL query, nothing else.
 
             return medical_codes, required_tables
 
-    def generate_and_execute_query(self, query: str, execute: bool = True) -> Dict[str, Any]:
+    def generate_and_execute_query(self, query: str, execute: bool = True, data_explanation: str = None, skip_medical_codes: bool = False) -> Dict[str, Any]:
         """Main method to generate and optionally execute ClickHouse query from natural language"""
 
         # Start overall timing
@@ -645,20 +528,26 @@ Return ONLY the ClickHouse SQL query, nothing else.
 
         try:
             # Step 1: Run parallel analysis (medical codes + table identification)
-            print("🔍 Extracting medical codes and identifying tables in parallel...")
+            if skip_medical_codes:
+                print("🔍 Identifying tables (skipping medical code extraction)...")
+            else:
+                print("🔍 Extracting medical codes and identifying tables in parallel...")
             parallel_start = time.time()
 
-            medical_codes, required_tables = self._run_parallel_analysis(query)
+            medical_codes, required_tables = self._run_parallel_analysis(query, skip_medical_codes)
 
             parallel_time = time.time() - parallel_start
             self.timing_data['stages']['parallel_analysis'] = round(parallel_time * 1000, 2)
-            print(f"✅ Parallel analysis completed in {parallel_time:.3f}s")
+            if skip_medical_codes:
+                print(f"✅ Table analysis completed in {parallel_time:.3f}s")
+            else:
+                print(f"✅ Parallel analysis completed in {parallel_time:.3f}s")
 
             # Step 2: Generate ClickHouse query using GPT
             print("⚙️ Generating ClickHouse query...")
             gpt_start = time.time()
 
-            prompt = self._build_comprehensive_prompt(query, medical_codes, required_tables)
+            prompt = self._build_comprehensive_prompt(query, medical_codes, required_tables, data_explanation)
 
             response = requests.post(
                 'https://api.openai.com/v1/chat/completions',
@@ -699,8 +588,8 @@ Return ONLY the ClickHouse SQL query, nothing else.
             self.timing_data['stages']['gpt_generation'] = round(gpt_time * 1000, 2)
             print(f"✅ Query generated in {gpt_time:.3f}s")
 
-            # 🧠 New: Infer visualization dimension (1=pie/bar, 2=line)
-            viz = infer_viz_dimension(query, clickhouse_query)
+            # 🧠 New: Infer visualization dimension using chart agent
+            viz = infer_viz_dimension(query, clickhouse_query, self.chart_classifier)
 
             # Step 3: Execute the query if requested
             execution_result = None
@@ -759,7 +648,7 @@ Return ONLY the ClickHouse SQL query, nothing else.
         result = self.generate_and_execute_query(query, execute=False)
         # Ensure viz exists even when not executing
         if result.get('success') and 'viz' not in result:
-            result['viz'] = infer_viz_dimension(query, result.get('query', ''))
+            result['viz'] = infer_viz_dimension(query, result.get('query', ''), self.chart_classifier)
         return result
 
     def execute_query(self, clickhouse_query: str) -> Dict[str, Any]:
@@ -770,7 +659,7 @@ Return ONLY the ClickHouse SQL query, nothing else.
             execution_time = time.time() - start_time
 
             # Even for direct execution, attempt a viz guess from SQL
-            viz = infer_viz_dimension("", clickhouse_query)
+            viz = infer_viz_dimension("", clickhouse_query, self.chart_classifier)
 
             return {
                 'success': result is not None,

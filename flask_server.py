@@ -854,6 +854,160 @@ def code_addition_review():
             'error': f'Internal server error: {str(e)}'
         }), 500
 
+@app.route('/EnhancedQueryExecution', methods=['POST'])
+def enhanced_query_execution():
+    """
+    Enhanced endpoint that uses v1_agent and table_agent with data explanation
+    
+    Request Body:
+    {
+        "query": "Find top hospitals for diabetes patients",
+        "data_explanation": "This query seeks to identify healthcare facilities with the highest volume of diabetes patient care",
+        "format": "json"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "original_query": "Find top hospitals for diabetes patients",
+        "data_explanation": "This query seeks to identify healthcare facilities...",
+        "sql_query": "SELECT...",
+        "results": [...],
+        "generation_time_ms": 5000,
+        "execution_time_ms": 150,
+        "total_time_ms": 5150,
+        "row_count": 10,
+        "columns": [...],
+        "medical_codes": {},
+        "required_tables": [...],
+        "viz": {
+            "dimension": 2,
+            "chart": "bar",
+            "rationale": "AI classification: Rankings and comparisons",
+            "ai_details": {...}
+        },
+        "metadata": {...}
+    }
+    """
+    try:
+        # Initialize agents
+        initialize_agents()
+        
+        # Validate request
+        if not request.is_json:
+            return jsonify({
+                'success': False,
+                'error': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required field: query'
+            }), 400
+        
+        user_query = data['query'].strip()
+        if not user_query:
+            return jsonify({
+                'success': False,
+                'error': 'Query cannot be empty'
+            }), 400
+        
+        # Extract additional fields
+        data_explanation = data.get('data_explanation', '').strip()
+        output_format = data.get('format', 'raw')
+        
+        # Use v1_agent with data explanation and skip medical code extraction
+        result = nlp_agent.generate_and_execute_query(
+            user_query, 
+            execute=True, 
+            data_explanation=data_explanation if data_explanation else None,
+            skip_medical_codes=True
+        )
+        
+        if result['success']:
+            # Extract execution results
+            execution_result = result.get('execution_result')
+            
+            if execution_result is not None:
+                # Format execution results
+                rows = execution_result.result_rows
+                columns = execution_result.column_names
+                
+                if output_format.lower() == 'json':
+                    # Convert to list of dictionaries
+                    formatted_results = []
+                    for row in rows:
+                        row_dict = {}
+                        for i, col in enumerate(columns):
+                            row_dict[col] = row[i] if i < len(row) else None
+                        formatted_results.append(row_dict)
+                else:
+                    # Raw format - list of lists
+                    formatted_results = [list(row) for row in rows]
+                
+                response = {
+                    'success': True,
+                    'original_query': user_query,
+                    'data_explanation': data_explanation,
+                    'sql_query': result['query'],
+                    'results': formatted_results,
+                    'generation_time_ms': result['timing']['stages'].get('parallel_analysis', 0) + result['timing']['stages'].get('gpt_generation', 0),
+                    'execution_time_ms': result['timing']['stages'].get('query_execution', 0),
+                    'total_time_ms': result['timing']['total_time_ms'],
+                    'row_count': len(rows),
+                    'columns': columns,
+                    'medical_codes': result['medical_codes'],
+                    'required_tables': result['required_tables'],
+                    'viz': result.get('viz', {}),
+                    'metadata': {
+                        'tables_used': result['metadata']['tables_used'],
+                        'codes_extracted': result['metadata']['codes_extracted'],
+                        'executed_at': time.time(),
+                        'format': output_format,
+                        'used_data_explanation': bool(data_explanation)
+                    }
+                }
+            else:
+                # Query generated but execution failed
+                response = {
+                    'success': False,
+                    'error': 'SQL query generated successfully but execution failed',
+                    'original_query': user_query,
+                    'data_explanation': data_explanation,
+                    'sql_query': result['query'],
+                    'results': [],
+                    'generation_time_ms': result['timing']['stages'].get('parallel_analysis', 0) + result['timing']['stages'].get('gpt_generation', 0),
+                    'execution_time_ms': result['timing']['stages'].get('query_execution', 0),
+                    'total_time_ms': result['timing']['total_time_ms'],
+                    'medical_codes': result['medical_codes'],
+                    'required_tables': result['required_tables'],
+                    'viz': result.get('viz', {})
+                }
+        else:
+            # Query generation failed
+            response = {
+                'success': False,
+                'error': result['error'],
+                'original_query': user_query,
+                'data_explanation': data_explanation,
+                'timing': result.get('timing', {}),
+                'viz': result.get('viz', {})
+            }
+        
+        # Log the request
+        app.logger.info(f"EnhancedQueryExecution - Query: {user_query[:50]}... - Success: {response['success']} - Used Explanation: {bool(data_explanation)}")
+        
+        return jsonify(response), 200 if response['success'] else 500
+    
+    except Exception as e:
+        app.logger.error(f"Error in enhanced_query_execution: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Internal server error: {str(e)}'
+        }), 500
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
@@ -869,6 +1023,7 @@ def not_found(error):
             'POST /GetAndExecuteQuery',
             'POST /ExecuteWithCodes',
             'POST /CodeAdditionReview',
+            'POST /EnhancedQueryExecution',
             'GET /tables'
         ]
     }), 404
@@ -899,6 +1054,7 @@ if __name__ == '__main__':
     print("   POST /GetAndExecuteQuery          - Combined: Generate + Execute")
     print("   POST /ExecuteWithCodes            - Execute using refined query + medical codes")
     print("   POST /CodeAdditionReview          - Process user additions to refine queries")
+    print("   POST /EnhancedQueryExecution      - Enhanced query execution with data explanation")
     print("   GET  /tables                      - List available tables")
     print()
     print("🔗 Server will be available at: http://localhost:5001")
