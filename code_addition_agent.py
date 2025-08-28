@@ -210,14 +210,27 @@ class CodeAdditionAgent:
                 }
             
             if not user_input:
-                # If no user input, return the refined query as is
+                # If no user input, still incorporate existing medical codes into the query
+                existing_items = self.extract_items_from_codes(medical_codes)
+                
+                # Create a final query that includes existing medical codes and drugs
+                if existing_items["drugs"] or existing_items["codes"]:
+                    all_items = existing_items["drugs"] + existing_items["codes"]
+                    if all_items:
+                        final_query = f"{refined_query} {', '.join(all_items)}"
+                    else:
+                        final_query = refined_query
+                else:
+                    final_query = refined_query
+                
                 return {
                     "status": "success",
-                    "final_query": refined_query,
-                    "data_explanation": "Query results based on refined search criteria",
+                    "final_query": final_query,
+                    "data_explanation": "Query results based on refined search criteria with existing medical codes",
                     "original_query": original_query,
+                    "refined_query": refined_query,
                     "user_input": "",
-                    "modifications": "No user modifications requested"
+                    "format": request_data.get("format", "text")
                 }
             
             query_result = self.generate_refined_query(
