@@ -27,21 +27,31 @@ class CodeAdditionAgent:
     def __init__(self):
         self.client = openai.OpenAI(api_key=OPENAI_API_KEY)
     
-    def extract_drug_names_from_codes(self, medical_codes: Dict[str, Any]) -> List[str]:
+    def extract_items_from_codes(self, medical_codes: Dict[str, Any]) -> Dict[str, List[str]]:
         """
-        Extract drug names from medical codes if available.
+        Extract drugs and medical codes from the medical codes dictionary.
         """
-        drugs = []
+        items = {"drugs": [], "codes": []}
         
         # Check for drug_names field (legacy support)
         if medical_codes.get("drug_names"):
             for drug in medical_codes["drug_names"]:
                 if drug.get("brand"):
-                    drugs.append(drug["brand"])
+                    items["drugs"].append(drug["brand"])
                 elif drug.get("generic"):
-                    drugs.append(drug["generic"])
+                    items["drugs"].append(drug["generic"])
         
-        return drugs
+        # Extract medical codes
+        code_types = ["icd10", "icd9", "cpt", "hcpcs"]
+        for code_type in code_types:
+            if medical_codes.get(code_type):
+                for code_item in medical_codes[code_type]:
+                    if isinstance(code_item, dict) and code_item.get("code"):
+                        items["codes"].append(f"{code_type.upper()}: {code_item['code']}")
+                    elif isinstance(code_item, str):
+                        items["codes"].append(f"{code_type.upper()}: {code_item}")
+        
+        return items
     
     def extract_additional_items(self, user_input: str) -> Dict[str, List[str]]:
         """
@@ -54,6 +64,12 @@ class CodeAdditionAgent:
         Return a JSON object with:
         {{
             "drugs": ["list of drug names found"],
+            "medical_codes": {{
+                "icd10": ["list of ICD-10 codes found"],
+                "icd9": ["list of ICD-9 codes found"],
+                "cpt": ["list of CPT codes found"],
+                "hcpcs": ["list of HCPCS codes found"]
+            }},
             "medical_terms": ["list of medical conditions/terms found"],
             "other_items": ["list of other relevant items like hospital names, locations, etc."],
             "intent": "brief description of what the user wants to add/modify"
@@ -76,7 +92,7 @@ class CodeAdditionAgent:
             return result
         except Exception as e:
             print(f"Warning: Error extracting items from user input: {e}")
-            return {"drugs": [], "medical_terms": [], "other_items": [], "intent": ""}
+            return {"drugs": [], "medical_codes": {"icd10": [], "icd9": [], "cpt": [], "hcpcs": []}, "medical_terms": [], "other_items": [], "intent": ""}
     
     def generate_refined_query(self, 
                              original_query: str, 
@@ -86,8 +102,8 @@ class CodeAdditionAgent:
         """
         Generate the final refined query incorporating user additions.
         """
-        # Extract existing drugs from medical codes
-        existing_drugs = self.extract_drug_names_from_codes(medical_codes)
+        # Extract existing drugs and codes from medical codes
+        existing_items = self.extract_items_from_codes(medical_codes)
         
         # Extract additional items from user input
         extracted_items = self.extract_additional_items(user_input)
@@ -98,23 +114,27 @@ class CodeAdditionAgent:
 
         Current Information:
         - Refined Query: "{refined_query}"
-        - Existing Drugs: {existing_drugs}
+        - Existing Drugs: {existing_items["drugs"]}
+        - Existing Medical Codes: {existing_items["codes"]}
         - User Input: "{user_input}"
         - Extracted Items: {json.dumps(extracted_items, indent=2)}
 
         Requirements:
         1. Keep the query simple and direct for NLP-to-SQL processing
         2. Use plain, straightforward language
-        3. Include all relevant items explicitly in the query (NO DUPLICATES)
+        3. Include all relevant items (drugs, medical codes, conditions) explicitly in the query (NO DUPLICATES)
         4. Avoid complex medical terminology
         5. Structure should be clear: "[action] [items] by [metric]" or similar
-        6. Remove any duplicate drug names or items
+        6. Remove any duplicate drug names, medical codes, or items
+        7. Incorporate both drugs and medical codes when adding new items from user input
 
         Examples of good simple queries:
         - "Top hospitals for diabetes patients by volume"
         - "Most prescribed drugs aspirin, ibuprofen by count"
         - "Best performing clinics for heart surgery by success rate"
         - "Top 10 hospitals in California for cancer treatment by patient volume"
+        - "GLP-1 prescriptions Ozempic, Victoza, Trulicity, Byetta with HCPCS J3490 by volume"
+        - "Diabetes patients with ICD-10 E11 and medications metformin, insulin by provider"
 
         IMPORTANT: Return ONLY a valid JSON object with exactly this structure:
         {{
