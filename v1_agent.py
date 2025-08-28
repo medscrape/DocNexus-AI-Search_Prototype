@@ -337,15 +337,16 @@ SQL GENERATION RULES:
 15. Always CONCAT(toString(year), '-', lpad(toString(month), 2, '0')) as year_month when grouping by year and month (instead of keeping them as two separate columns).
 
 CRITICAL SCOPE RULE:
-16. FORBIDDEN PATTERN - Never reference table aliases that don't exist in outer query scope. When using FROM (subquery) AS agg JOIN table pattern, outer SELECT can only reference agg.column_name and joined table columns. Never use count(DISTINCT m.patient_id) or any original table alias from inside the subquery in outer SELECT.
-
+16. FORBIDDEN PATTERN - In outer SELECT, NEVER reference table aliases from inside subqueries (like m.patient_id when m is only defined inside subquery). When using FROM (subquery) AS agg JOIN table pattern, outer SELECT can ONLY use agg.column_name and joined table columns. NEVER use uniq(m.patient_id), count(DISTINCT m.patient_id), or any function on subquery table aliases in outer SELECT.
 PERFORMANCE OPTIMIZATION RULES:
 17. Use PREWHERE for primary filters - Apply most selective conditions (diagnosis_code, procedure_code) using PREWHERE instead of WHERE: PREWHERE diagnosis_code LIKE 'K51%'
 18. Pre-aggregate before JOINs - For provider rankings, aggregate large tables first then JOIN: FROM (SELECT type_1_npi, uniq(patient_id) FROM medical_blue PREWHERE ... GROUP BY type_1_npi) agg JOIN as_providers_v1 p ON agg.type_1_npi = p.type_1_npi
 19. Use LIKE for prefix matches - Replace ILIKE '%K51%' with LIKE 'K51%' when filtering by code prefixes for faster execution
 20. Avoid count(DISTINCT) across JOINs - Use uniq() function in subqueries instead of count(DISTINCT) across large table JOINs
 21. When using subquery aggregation pattern - Use the pre-calculated column from subquery (agg.column_name) in outer SELECT, not the original table columns. Never re-aggregate already aggregated data.
-
+22. Avoid string-based name JOINs - Use NPI numbers for provider JOINs (type_1_npi) instead of matching names with CONCAT. Name formatting varies and causes failed matches.
+23. Medical condition arrays contain codes/terms, not full disease names - When filtering conditions arrays, use medical codes or search for partial terms like 'COLITIS' not 'Ulcerative Colitis'.
+24. Remove redundant ORDER BY - Don't use ORDER BY in both subquery and outer query. Use it only in the final outer query.
 
 MEDICAL CODE MATCHING RULES:
 - For ICD codes: Use 'diagnosis_code' column in medical_blue table ONLY
