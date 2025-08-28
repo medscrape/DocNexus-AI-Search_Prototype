@@ -26,6 +26,7 @@ from v1_agent import NLPToClickHouseAgent
 from clickhouse_agent import ClickHouseAgent
 from clarifying_agent import QueryClarifyingAgent
 from column_simple import get_medical_codes
+from code_addition_agent import CodeAdditionAgent
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -35,16 +36,19 @@ CORS(app)  # Enable CORS for all routes
 nlp_agent = None
 clickhouse_agent = None
 clarifying_agent = None
+code_addition_agent = None
 
 def initialize_agents():
     """Initialize agents on first request"""
-    global nlp_agent, clickhouse_agent, clarifying_agent
+    global nlp_agent, clickhouse_agent, clarifying_agent, code_addition_agent
     if nlp_agent is None:
         nlp_agent = NLPToClickHouseAgent()
     if clickhouse_agent is None:
         clickhouse_agent = ClickHouseAgent()
     if clarifying_agent is None:
         clarifying_agent = QueryClarifyingAgent()
+    if code_addition_agent is None:
+        code_addition_agent = CodeAdditionAgent()
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -765,6 +769,91 @@ def list_tables():
             'error': f'Internal server error: {str(e)}'
         }), 500
 
+@app.route('/CodeAdditionReview', methods=['POST'])
+def code_addition_review():
+    """
+    Process user additions to refine medical queries
+    
+    Request Body:
+    {
+        "original_query": "Highest prescriptions of GLP-1",
+        "clarification_provided": "Looking for GLP-1 receptor agonist prescription volume data",
+        "refined_query": "Top GLP-1 prescriptions by volume",
+        "medical_codes": {
+            "icd10": [],
+            "icd9": [],
+            "cpt": [],
+            "hcpcs": [
+                {"code": "J3490", "description": "Unclassified drugs"}
+            ],
+            "loinc": [],
+            "snomed": [],
+            "jcodes": [],
+            "drug_names": [
+                {"generic": "semaglutide", "brand": "Ozempic"},
+                {"generic": "liraglutide", "brand": "Victoza"},
+                {"generic": "dulaglutide", "brand": "Trulicity"}
+            ]
+        },
+        "user_input": "also include Byetta in the analysis",
+        "format": "json"
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "final_query": "Top GLP-1 prescriptions Ozempic, Victoza, Trulicity, Byetta by volume",
+        "data_explanation": "Comparison of prescription counts for GLP-1 medications including Ozempic, Victoza, Trulicity, and Byetta.",
+        "original_query": "Highest prescriptions of GLP-1",
+        "refined_query": "Top GLP-1 prescriptions by volume",
+        "user_input": "also include Byetta in the analysis",
+        "format": "json"
+    }
+    """
+    try:
+        # Initialize agents
+        initialize_agents()
+        
+        # Validate request
+        if not request.is_json:
+            return jsonify({
+                'status': 'error',
+                'error': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'error': 'Request body is required'
+            }), 400
+        
+        # Validate required fields
+        required_fields = ['original_query', 'refined_query']
+        for field in required_fields:
+            if field not in data or not data[field].strip():
+                return jsonify({
+                    'status': 'error',
+                    'error': f'Missing or empty required field: {field}'
+                }), 400
+        
+        # Process the request using CodeAdditionAgent
+        result = code_addition_agent.process_request(data)
+        
+        # Log the request
+        app.logger.info(f"CodeAdditionReview - Original: {data.get('original_query', '')[:50]}... - Status: {result.get('status', 'unknown')}")
+        
+        # Return the result with appropriate status code
+        status_code = 200 if result.get('status') == 'success' else 500
+        return jsonify(result), status_code
+    
+    except Exception as e:
+        app.logger.error(f"Error in code_addition_review: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': f'Internal server error: {str(e)}'
+        }), 500
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
@@ -779,6 +868,7 @@ def not_found(error):
             'POST /ExecuteQuery', 
             'POST /GetAndExecuteQuery',
             'POST /ExecuteWithCodes',
+            'POST /CodeAdditionReview',
             'GET /tables'
         ]
     }), 404
@@ -808,6 +898,7 @@ if __name__ == '__main__':
     print("   POST /ExecuteQuery                - Execute SQL query on ClickHouse")
     print("   POST /GetAndExecuteQuery          - Combined: Generate + Execute")
     print("   POST /ExecuteWithCodes            - Execute using refined query + medical codes")
+    print("   POST /CodeAdditionReview          - Process user additions to refine queries")
     print("   GET  /tables                      - List available tables")
     print()
     print("🔗 Server will be available at: http://localhost:5001")

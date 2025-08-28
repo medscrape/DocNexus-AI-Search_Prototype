@@ -54,7 +54,7 @@ MEASUREMENT METRICS - What exactly to count/measure:
 - "performance" could mean: prescription volume, patient outcomes, adherence rates, cost metrics
 
 AGGREGATION LEVEL - What entity to analyze:
-- Individual providers vs hospitals vs health systems vs geographic regions
+- Individual providers vs hospitals 
 - Organization-level vs individual prescriber analysis  
 - Patient-level vs population-level metrics
 
@@ -68,10 +68,7 @@ HEALTHCARE DATA RELATIONSHIPS:
 - Provider queries: individual prescribers vs organizational affiliations vs referral networks
 - Patient analysis: medical claims vs pharmacy claims vs combined analysis
 
-GEOGRAPHIC/DEMOGRAPHIC SCOPE:
-- State/regional focus vs national analysis
-- Specific specialties vs all providers
-- Patient demographics or payer types
+
 
 Examples of good clarifying questions:
 - "When you say 'top hospitals', do you want to rank by total prescription volume, number of unique patients, or something else?"
