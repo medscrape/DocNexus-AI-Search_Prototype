@@ -332,6 +332,7 @@ SQL GENERATION RULES:
 10. Include appropriate ORDER BY and LIMIT clauses for result management
 11. Use Pattern matching like "diagnosis_code ILIKE '%C34%' for medical conditions"
 12. - For drug class queries, search by specific drug names not class names - drug classes are not literal database values
+13.DO NOT add "LIMIT 1" by default.If a LIMIT is needed for top results, default to LIMIT 10.
 
 MEDICAL CODE MATCHING RULES:
 - For ICD codes: Use 'diagnosis_code' column in medical_blue table ONLY
